@@ -1,0 +1,37 @@
+# Python and local environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Firmware, generated artifacts and private inputs
+/inputs/
+/firmware/
+/tools/
+/outputs/
+/output/
+/dist/
+/local/
+*.img
+*.bin
+*.elf
+*.zip
+*.7z
+*.log
+*.pem
+*.key
+*.p12
+*.pfx
+.env
+.env.*
+local-records.md
+
+# Editor and operating system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
