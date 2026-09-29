@@ -15,6 +15,7 @@ htmlcov/
 /output/
 /dist/
 /local/
+/logs/
 *.img
 *.bin
 *.elf

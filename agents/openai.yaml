@@ -1,4 +1,4 @@
 interface:
   display_name: "MTK TEE NoGZ"
-  short_description: "离线修改 ATF，校验 NoGZ 与 EL2h 交接并生成 legacy 签名镜像"
-  default_prompt: "使用 $mtk-tee-nogz 核对这份 tee.img 和对应 LK 的版本，生成 NoGZ 修正副本并完成离线回归与 legacy 签名，不刷设备。"
+  short_description: "离线修改 ATF，检测 preloader 的 new/legacy 模式并签名回归"
+  default_prompt: "使用 $mtk-tee-nogz 核对 TEE、LK 和对应 preloader，生成 NoGZ 副本，按检测出的 new/legacy 模式签名并完成离线回归，不刷设备。"

@@ -14,6 +14,7 @@ RUNTIME_FILES = (
     "references/adaptation.md",
     "references/profiles.json",
     "scripts/build.py",
+    "scripts/detect_pl_cert_mode.py",
 )
 DEVELOPMENT_FILES = (
     ".gitignore",
@@ -21,6 +22,7 @@ DEVELOPMENT_FILES = (
     ".github/workflows/ci.yml",
     "scripts/package.py",
     "tests/test_build.py",
+    "tests/test_cert_mode.py",
     "tests/test_repository.py",
 )
 

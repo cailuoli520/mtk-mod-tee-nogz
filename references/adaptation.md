@@ -37,7 +37,13 @@ expdb 可能包含旧环形日志和多轮重启，先核对轮次与时间，�
 
 ## 签名
 
-使用用户已有 pwnage 的 `sign_mtk_cert.py --legacy --all -w`；
-记录工具哈希和完整输出。不得重复对成品插入 legacy override。
+先使用仓库内原样收录的 `scripts/detect_pl_cert_mode.py` 检测对应 preloader：
+
+- `NEW_PARSER`（new）：使用 `sign_mtk_cert.py --all -w`，不加模式参数。
+- `LEGACY`：使用 `sign_mtk_cert.py --legacy --all -w`。
+- `NEED_MANUAL`、冲突或检测失败：停止，不按机型猜测，不自动回退模式。
+
+`--all -w -o` 属于正常输入输出选项；不存在 `--new` 参数。
+记录检测器、输入 preloader 和签名工具的哈希及完整输出。不得对成品反复插入 override。
 验证两组 CERT1/CERT2、header/data hash，并检查最终输出的 ATF 修改集合和
 TEE 数据区不变。Trusted root check 若跳过，必须照实记录。

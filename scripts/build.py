@@ -278,11 +278,39 @@ def run_tool(tools, name, args, output):
     return result.stdout
 
 
+def cert_mode_flags(status):
+    if status == "NEW_PARSER":
+        return []
+    if status == "LEGACY":
+        return ["--legacy"]
+    raise ValueError(f"Certificate mode is not conclusive: {status}; manual analysis required")
+
+
+def detect_signing_mode(preloader, output_dir):
+    require(preloader.stat().st_size <= 32 * 1024 * 1024, "Preloader exceeds detector size limit")
+    original_hash = sha(preloader.read_bytes())
+    text = run_tool(
+        Path(__file__).resolve().parent, "detect_pl_cert_mode.py",
+        [preloader, "--json", "--report", output_dir / "cert-mode.txt"],
+        output_dir / "detect.log",
+    )
+    result = json.loads(text)
+    records = result.get("results")
+    require(isinstance(records, list) and len(records) == 1, "Expected one detector result")
+    detection = records[0]
+    cert_mode_flags(detection.get("status"))
+    require(Path(detection["path"]).resolve() == preloader.resolve(), "Detector input path mismatch")
+    require(detection.get("sha256") == original_hash, "Detector input hash mismatch")
+    require(sha(preloader.read_bytes()) == original_hash, "Preloader changed during detection")
+    return detection
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", choices=["yunluo", "peral"], required=True)
     parser.add_argument("--tee", type=Path, required=True)
     parser.add_argument("--lk", type=Path, required=True)
+    parser.add_argument("--preloader", type=Path, help="matching preloader; required when signing")
     parser.add_argument("--tools", type=Path)
     parser.add_argument("--out-dir", type=Path)
     parser.add_argument("--check-only", action="store_true")
@@ -296,17 +324,22 @@ def main():
     modified = patch(stock["atf"], p)
     checks = regression(stock["atf"], modified, lk, p)
     if args.check_only:
-        print(json.dumps({"profile": args.profile, "passed_checks": checks, "device_tested": False}, indent=2))
+        print(json.dumps({"profile": args.profile, "passed_checks": checks,
+                          "cert_mode": None, "device_tested": False}, indent=2))
         return
-    require(args.tools is not None and args.out_dir is not None, "--tools and --out-dir required")
+    require(args.tools is not None and args.out_dir is not None and args.preloader is not None,
+            "--tools, --out-dir and --preloader required when signing")
     require(not args.out_dir.exists(), "Output directory exists; choose a fresh directory")
     for tool in ("sign_mtk_cert.py", "verify_mtk_image.py"):
         require((args.tools / tool).is_file(), f"Missing {tool}")
     args.out_dir.mkdir(parents=True)
-    unsigned, final = args.out_dir / "tee.unsigned.img", args.out_dir / "tee_nogz_legacy.img"
+    detection = detect_signing_mode(args.preloader, args.out_dir)
+    flags = cert_mode_flags(detection["status"])
+    mode = "legacy" if flags else "new"
+    unsigned, final = args.out_dir / "tee.unsigned.img", args.out_dir / f"tee_nogz_{mode}.img"
     unsigned.write_bytes(patch(source, p, 512))
     run_tool(args.tools, "sign_mtk_cert.py",
-             [unsigned, "--legacy", "--all", "-w", "-o", final], args.out_dir / "sign.log")
+             [unsigned, *flags, "--all", "-w", "-o", final], args.out_dir / "sign.log")
     output = run_tool(args.tools, "verify_mtk_image.py", ["--all", final], args.out_dir / "verify.log")
     require(output.count("Result: VALID") == 2, "Expected two VALID image groups")
     signed = parts(final.read_bytes())
@@ -314,6 +347,7 @@ def main():
     require(signed["tee"] == stock["tee"], "TEE executable data changed")
     checks = regression(stock["atf"], signed["atf"], lk, p)
     require(args.tee.read_bytes() == source and args.lk.read_bytes() == source_lk, "Input changed")
+    require(sha(args.preloader.read_bytes()) == detection["sha256"], "Preloader changed")
     instructions = []
     for off, _, _ in patches(p):
         ins = next(MD.disasm(signed["atf"][off:off + 4], A + off))
@@ -323,12 +357,22 @@ def main():
         "profile": args.profile, "input_tee_sha256": sha(source), "input_lk_sha256": sha(source_lk),
         "output": str(final.resolve()), "output_size": final.stat().st_size,
         "output_sha256": sha(final.read_bytes()), "passed_checks": checks,
-        "historical_output_matches": sha(final.read_bytes()) == p["historical_output_sha256"],
+        "cert_mode": mode, "signing_mode_flags": flags,
+        "input_preloader_sha256": detection["sha256"],
+        "cert_detection": {key: detection.get(key) for key in ("status", "isa", "reason")},
+        "cert_detection_report": "cert-mode.txt",
+        "historical_output_cert_mode": p["historical_output_cert_mode"],
+        "historical_output_matches": (sha(final.read_bytes()) == p["historical_output_sha256"]
+                                      if mode == p["historical_output_cert_mode"] else None),
         "device_tested": False, "scope": "Bounded instruction regression, not full boot or hardware verification",
         "patches": [{"atf_offset": hex(o), "file_offset": hex(o + 512),
                      "before": hex(b), "after": hex(a)} for o, b, a in patches(p)],
-        "tool_hashes": {name: sha((args.tools / name).read_bytes())
-                        for name in ("sign_mtk_cert.py", "verify_mtk_image.py")},
+        "tool_hashes": {
+            **{name: sha((args.tools / name).read_bytes())
+               for name in ("sign_mtk_cert.py", "verify_mtk_image.py")},
+            "detect_pl_cert_mode.py": sha(
+                (Path(__file__).resolve().parent / "detect_pl_cert_mode.py").read_bytes()),
+        },
     }
     (args.out_dir / "manifest.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(json.dumps(report, indent=2))

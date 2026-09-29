@@ -2,7 +2,7 @@
 
 面向精确固件样本的 ATF-only NoGZ 离线研究工具，同时提供可安装的 Codex skill。
 
-修改 `tee.img` 中的 ATF 启动交接，保持 **LK 进入 EL1h、AArch64 内核交接到 EL2h**，并同步 ATF/LK 共享的 GZ-info tag。支持调用外部 pwnage 工具进行 legacy 处理和离线验签。
+修改 `tee.img` 中的 ATF 启动交接，保持 **LK 进入 EL1h、AArch64 内核交接到 EL2h**，并同步 ATF/LK 共享的 GZ-info tag。签名前检测 preloader，按结果选择 pwnage 的 new/legacy 模式并离线验签。
 
 > **实验性项目。** 离线回归和 `VALID` 不等于设备一定接受或能够启动。脚本没有自动刷写功能，不应在没有恢复条件的设备上盲目使用。本项目仅用于有权访问的固件与设备研究。
 
@@ -52,7 +52,8 @@ python -m venv .venv
 macOS 的底层依赖可用性需按自己的环境验证；本仓库 CI 配置覆盖 Ubuntu/Windows，不把命令可用等同于固件在设备上可用。
 
 需要生成签名副本时，另行准备可信的完整 pwnage 工具目录及其依赖。
-本项目只调用其中的 `sign_mtk_cert.py` 和 `verify_mtk_image.py`，不会下载、安装或捆绑它们。
+签名与验签调用其中的 `sign_mtk_cert.py` 和 `verify_mtk_image.py`，不会下载、安装或捆绑它们。
+仓库另外原样收录了 [detect_pl_cert_mode.py](scripts/detect_pl_cert_mode.py)，用来离线检测 preloader 的证书遍历模式。
 
 ## 快速使用
 
@@ -79,35 +80,59 @@ $inputDir = Join-Path $HOME 'private-firmware\peral'
 
 LK 文件可以重命名，脚本匹配的是文件内容。处理 yunluo 时，使用 `--profile yunluo` 和对应的一对原始输入。
 
-`--check-only` 不生成镜像或输出目录，也不调用 pwnage。
+`--check-only` 只进行 TEE/LK 补丁回归，不检测签名模式，不生成镜像或输出目录，也不调用 pwnage。
 
-### 生成 legacy 签名副本
+### 先检测签名模式
+
+```bash
+.venv/bin/python scripts/detect_pl_cert_mode.py \
+  "$HOME/private-firmware/peral/preloader.bin" --json
+```
+
+默认将完整证据保存到 `logs/` 下的新文件，目录已被 Git 忽略。报告包含输入路径和反汇编，不应直接上传。
+
+| 检测结果 | pwnage 模式参数 |
+|---|---|
+| **new：`NEW_PARSER`** | **不加模式参数**，既不加 `--legacy`，也没有 `--new` |
+| **legacy：`LEGACY`** | **加 `--legacy`** |
+| `NEED_MANUAL`、不支持或结果不明确 | 停止签名，先人工分析，不按机型猜测 |
+
+保留正常的 `--all -w -o` 输出选项。“new 什么也不加”指不增加模式选项，不是省略输入文件和写入选项。
+检测脚本是静态证据分析，不是 efuse、漏洞可利用性或设备启动验证。
+
+### 按检测结果生成签名副本
 
 ```bash
 .venv/bin/python scripts/build.py \
   --profile peral \
   --tee "$HOME/private-firmware/peral/tee.img" \
   --lk "$HOME/private-firmware/peral/lk.img" \
+  --preloader "$HOME/private-firmware/peral/preloader.bin" \
   --tools ../pwnage24mtk \
   --out-dir outputs/peral-run-01
 ```
 
+签名必须提供与目标启动链对应的 `--preloader`。脚本自动调用检测器，不要求手动选择模式。
+preloader 哈希会记入 manifest，但脚本不能仅凭文件名证明它与设备实际使用的一致。
 `--out-dir` 必须是尚不存在的新目录。重复运行时更换目录，不要覆盖旧结果或将签名产物当成原始输入。
 
 输出内容：
 
 ```text
 outputs/peral-run-01/
-  tee.unsigned.img       # 中间文件，不是签名成品
-  tee_nogz_legacy.img    # 签名后的候选镜像
+  cert-mode.txt          # 完整检测证据
+  detect.log             # 检测器 JSON 输出或错误
+  tee.unsigned.img        # 中间文件，不是签名成品
+  tee_nogz_legacy.img     # LEGACY 时；NEW_PARSER 时为 tee_nogz_new.img
   sign.log
   verify.log
   disassembly.txt
   manifest.json
 ```
 
-签名流程使用 `--legacy --all -w`，随后要求两个 `Result: VALID`，并从最终成品重新提取 ATF 做回归。
-该模式是外部工具的 legacy 证书处理方式，不代表拥有厂商私钥或获得新的官方授权。
+检测到 `NEW_PARSER` 时使用 `--all -w`，检测到 `LEGACY` 时使用 `--legacy --all -w`。
+随后要求两个 `Result: VALID`，并从最终成品重新提取 ATF 做回归。
+这些是外部工具的证书处理方式，不代表拥有厂商私钥或获得新的官方授权。
 
 查看退出码、完整日志和 `manifest.json`，不要仅凭 `.img` 文件存在判断成功。
 
@@ -134,7 +159,7 @@ skill 包只保留运行与阅读所需文件，不包含仓库的 CI、测试�
 
 ```text
 使用 $mtk-tee-nogz 检查我提供的 tee.img 和 LK。
-匹配已知版本后生成 NoGZ 副本并做离线回归与 legacy 签名，不刷设备。
+匹配已知版本后生成 NoGZ 副本，检测对应 preloader，并按 new/legacy 结果签名和回归，不刷设备。
 ```
 
 ## 仓库结构
@@ -151,9 +176,11 @@ skill 包只保留运行与阅读所需文件，不包含仓库的 CI、测试�
 │   └── profiles.json
 ├── scripts/
 │   ├── build.py
+│   ├── detect_pl_cert_mode.py
 │   └── package.py
 ├── tests/
 │   ├── test_build.py
+│   ├── test_cert_mode.py
 │   └── test_repository.py
 └── .github/workflows/ci.yml
 ```
@@ -169,7 +196,7 @@ python -m unittest discover -s tests -v
 python scripts/package.py --output dist
 ```
 
-- 单元测试使用合成数据，不需要固件、pwnage、网络访问或设备。
+- 单元测试使用合成数据，不需要固件、pwnage、网络访问或设备；签名调度测试中的工具返回值是明确的 mock，不用于证明密码学验证。
 - CI 配置在 Ubuntu/Windows 和 Python 3.11/3.12 上运行单元测试与打包。
 - CI 不包含真实固件，因此不能替代 `build.py --check-only` 的已知镜像回归，更不能证明硬件兼容性。
 - `package.py` 使用明确的文件白名单，生成源码包和可安装 skill 包；不打包目录里碰巧存在的镜像、日志或缓存。

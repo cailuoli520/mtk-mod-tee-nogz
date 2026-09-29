@@ -32,7 +32,7 @@
 2. 保持首次进入 LK 的 SPSR 为 EL1h。
 3. 让 ATF 和 LK 对共享 GZ-info tag 的理解一致。
 4. 将后续 AArch64 内核交接的 SPSR 强制为 EL2h。
-5. 使用用户提供的 pwnage 工具执行一次 legacy 签名、离线验签，并对签名后的数据重新回归。
+5. 使用原样收录的检测器分析对应 preloader，按 new/legacy 结果调用 pwnage，再离线验签和对成品回归。
 
 ### 1.2 不做什么
 
@@ -69,9 +69,11 @@ mtk-tee-nogz/
     adaptation.md
   scripts/
     build.py
+    detect_pl_cert_mode.py
     package.py
   tests/
     test_build.py
+    test_cert_mode.py
     test_repository.py
   .github/workflows/ci.yml
 ```
@@ -86,12 +88,13 @@ mtk-tee-nogz/
 | `adaptation.md` | 未知版本的审计要求和日志判读注意事项 |
 | `docs/technical-guide.md` | 本手册 |
 | `scripts/build.py` | 可执行的哈希检查、补丁、回归、签名与输出检查 |
+| `scripts/detect_pl_cert_mode.py` | 原样收录的 preloader 证书遍历模式检测器 |
 | `scripts/package.py` | 按文件白名单创建源码包和 skill 包 |
 | `tests/` | 无固件单元测试和发布文件检查 |
 | `.github/workflows/ci.yml` | GitHub Actions 测试与打包配置 |
 
 以上为源码包结构。精简 skill 安装包保留 README、SKILL、依赖清单、agents、
-docs、references 和 `scripts/build.py`，不包含测试、CI 或打包脚本。
+docs、references、`scripts/build.py` 和检测器，不包含测试、CI 或打包脚本。
 需要运行维护与打包命令时，应使用完整源码包。
 
 运行依赖：
@@ -283,7 +286,7 @@ callback 则携带 tag 地址进入尾部，先 clean，再 barrier，最后经 
 每次应用补丁前，都需要原指令字精确相等。
 
 10 个槽覆盖 40 字节，但不能写成“恰有 40 个字节值改变”，因为新旧指令可能共享部分字节。
-ATF 数据长度不变，没有附加独立 payload；成品整体增长来自 legacy 证书区域的变化。
+ATF 数据长度不变，没有附加独立 payload；签名后成品整体增长来自证书区域的变化，大小取决于检测选择的模式及工具版本。
 
 首次进入 LK 的 cold SPSR selector 保持原版：
 
@@ -346,6 +349,7 @@ b667a393d6d5bf573424f0e96615bea8207f27ba28dc7ba7097f7b3b5b09e5e2
 |---|---|
 | `tee_sha256`、`lk_sha256` | 输入文件身份 |
 | `historical_output_sha256` | 原工具版本下的历史修正版成品哈希 |
+| `historical_output_cert_mode` | 历史成品采用的模式；仅用于比较，不决定本次签名模式 |
 | `pc_patch` | cold writer 中设置下一入口的指令 |
 | `kernel_patch` | AArch64 kernel helper 中选择 SPSR 的指令 |
 | `getter`、`getter_before` | ATF GZ getter 入口及原前两条指令 |
@@ -381,10 +385,10 @@ b667a393d6d5bf573424f0e96615bea8207f27ba28dc7ba7097f7b3b5b09e5e2
 
 ```text
 使用 $mtk-tee-nogz 检查这份 tee.img 和对应 LK。
-版本匹配后生成 ATF-only NoGZ 副本并做 legacy 签名，不刷设备。
+版本匹配后生成 ATF-only NoGZ 副本，检测对应 preloader 并按 new/legacy 结果签名，不刷设备。
 ```
 
-目录里至少需要选定正确的 TEE 和对应 LK。其他分区可以作为分析参考，但不会因为在同一目录就自动被处理。
+补丁回归需要正确的 TEE 和对应 LK，签名还需要对应 preloader。其他分区不会因为在同一目录就自动被处理。
 
 ### 7.2 依赖检查
 
@@ -415,10 +419,41 @@ $inputDir = Join-Path $HOME 'private-firmware\yunluo'
 .\.venv\Scripts\python.exe scripts/build.py --profile yunluo --tee "$inputDir\tee.img" --lk "$inputDir\lk.img" --check-only
 ```
 
-`--check-only` 仍会检查输入身份、在内存中构造补丁并执行回归。
+`--check-only` 仍会检查 TEE/LK 身份、在内存中构造补丁并执行回归。
+它不检测签名模式，即使传入 `--preloader` 也不运行检测器；结果中的 `cert_mode` 为 null。
 它不调用 pwnage、不生成镜像或指定输出目录；结果 JSON 输出到标准输出，不会自动另存 `manifest.json`。
 
-### 7.4 生成并签名
+### 7.4 单独检测 preloader
+
+```powershell
+$inputDir = Join-Path $HOME 'private-firmware\peral'
+.\.venv\Scripts\python.exe scripts/detect_pl_cert_mode.py "$inputDir\preloader.bin" --json
+```
+
+检测器按 preloader 的 GFH 和证书遍历指令证据判断，不按机型名称或是否有重试循环判断：
+
+| 检测状态 | 解释 | 签名参数 |
+|---|---|---|
+| `NEW_PARSER`，即 new | 识别到已支持的 tag-aware 证书遍历 | 不加模式参数 |
+| `LEGACY` | 识别到需要 legacy wrapper 的 enter-value 遍历 | 加 `--legacy` |
+| `NEED_MANUAL` | 证据不足、冲突、格式或指令不受支持 | 停止，人工分析 |
+
+**new 不加 `--legacy`，也不存在 `--new`。** `--all -w -o` 仍是正常的签名输出选项。
+
+无 `--report` 时，检测器创建 `logs/cert_mode_*.txt` 保存完整证据；该目录被 Git 忽略。
+指定 `--report` 时，父目录应已存在，目标报告必须是新文件，不能覆盖 preloader。
+`--json` 输出结构化结果；正常识别退出 0，NEED_MANUAL 退出 3，报告保存错误退出 2。
+检测器还提供 `--regress`，只用于按顺序检查两个输入是否分别返回 NEW_PARSER 和 LEGACY，不应由构建流程强制某个机型符合固定模式。
+
+原脚本完整保留，SHA-256 为：
+
+```text
+a11f209e8cef3a08f43b39875386d345c00836c7f4c25f48712a58308fe041c7
+```
+
+当前检测器支持其代码识别范围内的 Thumb/AArch64 preloader；静态模式识别不等于证明 efuse、漏洞可利用性或设备启动。
+
+### 7.5 生成并签名
 
 以下 peral 示例使用新的唯一输出目录，可避免重复运行误覆盖旧结果：
 
@@ -426,19 +461,22 @@ $inputDir = Join-Path $HOME 'private-firmware\yunluo'
 $inputDir = Join-Path $HOME 'private-firmware\peral'
 $tools = '..\pwnage24mtk'
 $outDir = Join-Path 'outputs' ('peral-' + [guid]::NewGuid().ToString('N'))
-.\.venv\Scripts\python.exe scripts/build.py --profile peral --tee "$inputDir\tee.img" --lk "$inputDir\lk.img" --tools "$tools" --out-dir "$outDir"
+.\.venv\Scripts\python.exe scripts/build.py --profile peral --tee "$inputDir\tee.img" --lk "$inputDir\lk.img" --preloader "$inputDir\preloader.bin" --tools "$tools" --out-dir "$outDir"
 ```
 
 处理 yunluo 时同时更换 profile 和输入文件；示例中的 LK 文件名可以按实际情况调整，文件内容哈希不可更改。
-普通构建要求 `--tools` 和 `--out-dir`；输出目录必须尚不存在，即使已有目录为空也会拒绝。
+普通构建要求 `--tools`、`--out-dir` 和 `--preloader`；输出目录必须尚不存在，即使已有目录为空也会拒绝。
+脚本在写出 unsigned 镜像前自动检测模式；检测失败时只保留已生成的证据/错误报告，不继续签名。
+preloader 不按 profile 固定哈希选择模式，但会记录并检查本次输入的哈希；使用者必须确保提供的是目标启动链对应的文件。
 
-### 7.5 CLI 参数全集
+### 7.6 CLI 参数全集
 
 | 参数 | 必需条件 | 说明 |
 |---|---|---|
 | `--profile` | 始终 | 当前仅 `yunluo` 或 `peral` |
 | `--tee` | 始终 | 原始 tee.img 路径 |
 | `--lk` | 始终 | 匹配 profile 的原始 LK 路径，仅用于读取测试 |
+| `--preloader` | 普通构建 | 对应 preloader，仅用于模式检测与哈希记录 |
 | `--check-only` | 可选 | 只检查，无签名输出 |
 | `--tools` | 普通构建 | pwnage 所在目录 |
 | `--out-dir` | 普通构建 | 尚不存在的新输出目录 |
@@ -457,25 +495,32 @@ PowerShell 中可用 `$LASTEXITCODE` 判断命令是否失败；不要只看是�
 4. 对 ATF 原始指令逐项校验，在内存中构造补丁。
 5. 运行补丁前置回归。
 6. 若为 check-only，打印结果后结束。
-7. 普通构建检查工具和输出目录，再创建目录。
-8. 写出 `tee.unsigned.img`，在整个原始容器的 ATF 区应用同一组补丁。
-9. 调用 pwnage 进行一次 legacy 签名。
-10. 调用验签工具，要求输出中有两个 `Result: VALID`。
-11. 重新解析签名成品，确认 TEE 数据区不变、ATF 只包含指定修改，再次回归。
-12. 检查原 TEE/LK 字节仍未改变，保存反汇编和 manifest。
+7. 普通构建要求 preloader、工具和新输出目录，再创建目录。
+8. 调用原样收录的检测器，保存 `cert-mode.txt` 和 `detect.log`。
+9. 只接受一个明确的 NEW_PARSER 或 LEGACY 结果，核对报告路径和 preloader 哈希；其他情况停止。
+10. 写出 `tee.unsigned.img`，在原始容器的 ATF 区应用同一组补丁。
+11. NEW_PARSER 不加模式参数，LEGACY 加 `--legacy`，调用 pwnage 签名一次。
+12. 调用验签工具，要求输出中有两个 `Result: VALID`。
+13. 重新解析签名成品，确认 TEE 数据区不变、ATF 只包含指定修改，再次回归。
+14. 检查原 TEE/LK 和 preloader 未改变，保存反汇编和 manifest。
 
 签名命令的语义：
 
 ```text
+# NEW_PARSER / new:
+sign_mtk_cert.py tee.unsigned.img --all -w -o tee_nogz_new.img
+verify_mtk_image.py --all tee_nogz_new.img
+
+# LEGACY:
 sign_mtk_cert.py tee.unsigned.img --legacy --all -w -o tee_nogz_legacy.img
 verify_mtk_image.py --all tee_nogz_legacy.img
 ```
 
 `--all` 处理容器中的两组证书，`-w` 写入新输出。
-这里沿用 pwnage 对旧 libsec/CERT2 的 legacy 处理模式，不意味着拥有厂商私钥或生成了新的官方授权。
+这里按检测结果选择 pwnage 的 new/legacy 证书处理模式，不意味着拥有厂商私钥或生成了新的官方授权。
 具体效果以所用工具源码、完整日志和设备验证为准。
 
-不要把已签名成品当成新的原始输入重复执行 legacy 插入。
+不要把已签名成品当成新的原始输入重复执行 override 插入，也不要在检测不明确时自动重试另一模式。
 若签名工具失败，日志和可能的中间文件会保留；脚本没有自动回滚或清理输出目录。
 下次重试应使用新目录，不应跳过失败检查去使用残留成品。
 
@@ -488,6 +533,7 @@ CERT1/CERT2、header/data hash 和 Trusted root 行，不能把日志中的任�
 ### 9.1 当前报告的 14 条记录
 
 这是 `passed_checks` 数组的条目数，不是完整硬件测试数，也不等于旧分析工程的 unittest 数量。
+preloader 检测是单独的签名前置步骤，其完整证据保存在检测报告中，不算入这里的 14 条 ATF/LK 回归记录。
 
 | 记录 | 数量 | 实际检查 |
 |---|---:|---|
@@ -561,8 +607,10 @@ CERT1/CERT2、header/data hash 和 Trusted root 行，不能把日志中的任�
 
 ```text
 新的输出目录/
+  cert-mode.txt
+  detect.log
   tee.unsigned.img
-  tee_nogz_legacy.img
+  tee_nogz_new.img 或 tee_nogz_legacy.img
   sign.log
   verify.log
   disassembly.txt
@@ -571,15 +619,17 @@ CERT1/CERT2、header/data hash 和 Trusted root 行，不能把日志中的任�
 
 | 文件 | 说明 |
 |---|---|
+| `cert-mode.txt` | 检测器保存的完整证书遍历证据 |
+| `detect.log` | 检测器 stdout/stderr；成功时包含 JSON 结果 |
 | `tee.unsigned.img` | 改过 ATF、尚未由本次 pwnage 重签的中间文件，不是交付成品 |
-| `tee_nogz_legacy.img` | 签名后成品候选，仍有实机验证边界 |
+| `tee_nogz_new.img` / `tee_nogz_legacy.img` | 根据模式选择的签名成品名，仍有实机验证边界 |
 | `sign.log` | 签名子进程完整 stdout/stderr |
 | `verify.log` | 验签子进程完整 stdout/stderr |
 | `disassembly.txt` | 最终签名镜像中 10 个补丁槽的反汇编，不是完整 ATF 反汇编 |
 | `manifest.json` | 当前运行的身份、输出、检查、补丁和工具记录 |
 
 不同机型输出文件名相同，但必须放在不同目录中。
-交付时用 manifest 的 profile、完整路径和哈希识别，不能靠 `tee_nogz_legacy.img` 文件名猜机型。
+交付时用 manifest 的 profile、模式、完整路径和哈希识别，不能只靠文件名猜机型。
 
 ### 10.2 manifest 解释
 
@@ -587,21 +637,26 @@ CERT1/CERT2、header/data hash 和 Trusted root 行，不能把日志中的任�
 |---|---|
 | `profile` | 当前选择的已知样本 |
 | `input_tee_sha256`、`input_lk_sha256` | 实际读入文件的哈希 |
+| `input_preloader_sha256` | 检测的 preloader 哈希 |
+| `cert_mode`、`signing_mode_flags` | `new`/`legacy` 和实际使用的模式选项列表 |
+| `cert_detection`、`cert_detection_report` | 检测状态、ISA、原因和完整报告的相对路径 |
 | `output`、`output_size`、`output_sha256` | 成品路径、字节数与哈希 |
 | `passed_checks` | 签名后重新执行回归的记录列表 |
-| `historical_output_matches` | 是否与 profile 中历史成品完整哈希一致 |
+| `historical_output_cert_mode` | profile 中历史成品采用的模式 |
+| `historical_output_matches` | 模式相同时比较完整哈希，模式不同时为 null |
 | `device_tested` | 当前固定为 false |
 | `scope` | 有界指令回归，不是完整启动验证 |
 | `patches` | 每个槽的 ATF 偏移、文件偏移、原指令和新指令 |
-| `tool_hashes` | 两个 pwnage 入口脚本的哈希 |
+| `tool_hashes` | 两个 pwnage 入口脚本与原样检测器的哈希 |
 
 `tool_hashes` 不是完整 Python 环境或 pwnage 全目录的锁文件。
 `historical_output_matches` 为 false 时，脚本不会仅因此退出失败；它与输入身份拒绝属于不同检查。
 此时要比较工具版本、证书布局和完整日志，不能直接认定成品错误，也不能直接忽略差异。
+为 null 时表示本次模式与历史模式不同，未执行跨模式哈希比较；不能因此改回历史模式。
 
 ### 10.3 已经复现过的成品
 
-skill 创建时，两份输入均完成签名和签名后回归，历史完整哈希匹配为 true：
+以下是引入自动检测之前，两份输入以 legacy 模式生成的历史成品，仅供追溯：
 
 ```text
 yunluo
@@ -618,7 +673,8 @@ SHA-256：
 当时两个 profile 的原始 tee 分别为 3,413,728 和 3,294,416 字节，
 签名输出均增长 2,144 字节。这个增长值是该工具版本和样本的结果，不是未来所有工具版本的硬性常数。
 
-两份日志都包含 `Trusted root check: skipped`。文档中的历史复现不等于设备信任根已验证。
+两份历史日志都包含 `Trusted root check: skipped`，不等于设备信任根已验证。
+历史 legacy 成品不能决定本次模式；无论机型叫什么，均以当前提供的对应 preloader 检测结果为准。
 
 <a id="troubleshooting"></a>
 ## 11. 故障排查
@@ -629,6 +685,9 @@ SHA-256：
 |---|---|---|
 | `Unknown tee SHA256` | 是否选错版本、已签名成品或修改过的 tee | 改 profile 哈希掩盖不匹配 |
 | `Unknown LK SHA256` | 是否是对应原版 LK、其他锁态补丁版 | 把机型相同当作代码一致 |
+| `--preloader required when signing` 或缺少必需参数提示 | 是否提供了对应 preloader | 继续使用旧版统一 legacy 命令 |
+| 检测器非零退出、`NEED_MANUAL`、未知状态 | `cert-mode.txt` / `detect.log` 中的证据和原因 | 按机型猜测或自动回退另一模式 |
+| Detector input path/hash mismatch | 文件是否在检测期间变化，检测 JSON 是否对应本次输入 | 忽略检测与输入绑定 |
 | `Original instruction mismatch` | profile/脚本是否被改动，偏移或输入是否错误 | 去掉原值断言继续写 |
 | `Unsupported image header`、`Truncated image` | 容器布局、完整性和文件选择 | 强行按已知布局切片 |
 | `ModuleNotFoundError` | 使用的 Python、依赖路径及平台是否一致 | 无依据切换另一解释器并假定结果相同 |
@@ -640,7 +699,7 @@ SHA-256：
 | pwnage 失败或 VALID 不足两个 | 完整 sign/verify 日志、工具及模块版本 | 重复给残留 signed 文件插入 override |
 | 目录里有成品但无 manifest | 是否在中途失败，查看退出码 | 因为文件存在就宣称全部通过 |
 
-签名后原输入一致性检查只证明脚本结束时重新读取的 TEE/LK 与开始时一致，
+签名后原输入一致性检查只证明脚本结束时重新读取的 TEE/LK 与开始时一致，preloader 哈希与本次检测一致，
 不是对整个磁盘做过完整审计，也不是设备分区回读。
 
 ### 11.2 expdb 和实机现象
@@ -685,7 +744,7 @@ SHA-256：
 ### 13.1 迁移 skill
 
 保持整个 `mtk-tee-nogz` 目录结构，尤其是 `scripts/` 与 `references/profiles.json` 的相对关系。
-在目标机器准备用户自有输入、可用 Python 依赖和 pwnage 目录，重新跑 check-only 后再构建。
+在目标机器准备用户自有 TEE/LK/preloader、可用 Python 依赖和 pwnage 目录，重新跑 check-only、检测模式后再构建。
 
 迁移 skill 不意味着迁移固件、密钥、设备证据或第三方工具。
 路径由使用者明确提供，不应扫描或修改无关分区。公开包不包含个人机器的路径记录。
@@ -715,8 +774,8 @@ quick_validate.py <mtk-tee-nogz 所在目录>
 交接时至少保留：
 
 - profile、实际 TEE/LK SHA-256。
-- 最终成品绝对路径、大小、SHA-256。
-- manifest、完整 sign/verify 日志和补丁反汇编。
+- 最终成品绝对路径、大小、SHA-256，以及 new/legacy 模式。
+- manifest、完整 preloader 检测报告、sign/verify 日志和补丁反汇编。
 - 使用的 skill/工具版本或文件哈希。
 - 明确的测试范围、失败记录和实机验证状态。
 

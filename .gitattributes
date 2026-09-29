@@ -7,3 +7,5 @@
 *.zip binary
 *.img binary
 *.bin binary
+# Preserve the supplied detector byte-for-byte.
+scripts/detect_pl_cert_mode.py -text
