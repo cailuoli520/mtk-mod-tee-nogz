@@ -12,6 +12,7 @@
 |---|---|---|
 | `yunluo` | 已分析的 yunluo TEE/LK 配对 | 两个输入文件的完整 SHA-256 |
 | `peral` | 已分析的 Xiaomi 13T TEE/LK 配对 | 两个输入文件的完整 SHA-256 |
+| `xaga` | 已分析的 Redmi Note 11T Pro (xaga) TEE/LK 配对 | 两个输入文件的完整 SHA-256 |
 
 完整哈希和地址定义见 [profiles.json](references/profiles.json)。机型名称相同、固件版本相近或文件大小一致，都不能替代哈希匹配。
 
@@ -78,7 +79,7 @@ $inputDir = Join-Path $HOME 'private-firmware\peral'
 .\.venv\Scripts\python.exe scripts/build.py --profile peral --tee "$inputDir\tee.img" --lk "$inputDir\lk.img" --check-only
 ```
 
-LK 文件可以重命名，脚本匹配的是文件内容。处理 yunluo 时，使用 `--profile yunluo` 和对应的一对原始输入。
+LK 文件可以重命名，脚本匹配的是文件内容。处理 yunluo 时，使用 `--profile yunluo` 和对应的一对原始输入；处理 xaga（Redmi Note 11T Pro）时使用 `--profile xaga` 和该机型的原始 TEE/LK。
 
 `--check-only` 只进行 TEE/LK 补丁回归，不检测签名模式，不生成镜像或输出目录，也不调用 pwnage。
 

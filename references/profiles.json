@@ -54,5 +54,31 @@
     "lk_stack": ["0x1a7d0", "0x1a7fc"],
     "lk_elcheck": ["0x39c8", "0x3a6c"],
     "lk_illegal": "0x3a18"
+  },
+  "xaga": {
+    "tee_sha256": "bd4b13a7f75deb8decc401f30206894f60dab50c79f3200d34433480191a97ac",
+    "lk_sha256": "03856964ce672ef604fec34a701c6c687c0d296b6187f771e3647fac4dee9ef1",
+    "pc_patch": "0x1ad9c",
+    "kernel_patch": "0x64a4",
+    "getter": "0xe5f8",
+    "getter_before": ["0xf00001a8", "0xb94f0908"],
+    "callback": "0xdf14",
+    "flag": "0x45f08",
+    "cold": ["0x1ad74", "0x1adf8"],
+    "cold_helpers": ["0xb6e8", "0xb700"],
+    "kernel": ["0x6454", "0x6538"],
+    "ep": "0x53930",
+    "kernel_args": "0x539e0",
+    "tag_parser": ["0x6688", "0x68e8"],
+    "args_getter": ["0xb7fc", "0xb858"],
+    "handoff_global": "0x53af0",
+    "lk_parser": ["0x14cac", "0x14d40"],
+    "lk_getter": "0x1e8a8",
+    "lk_callback": "0x1e8bc",
+    "lk_gate": "0x28d4",
+    "lk_skip": "0x2904",
+    "lk_stack": ["0x1a7a0", "0x1a7cc"],
+    "lk_elcheck": ["0x39c8", "0x3a6c"],
+    "lk_illegal": "0x3a18"
   }
 }

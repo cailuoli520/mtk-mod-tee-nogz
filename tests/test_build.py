@@ -65,7 +65,7 @@ class ContainerTests(unittest.TestCase):
 
 class PatchTests(unittest.TestCase):
     def test_scope_length_and_original_unchanged(self):
-        for name in ("yunluo", "peral"):
+        for name in ("yunluo", "peral", "xaga"):
             with self.subTest(profile=name):
                 p = build.load_profile(name)
                 original = synthetic_atf(p)
@@ -114,7 +114,7 @@ class PatchTests(unittest.TestCase):
 
 class SyntheticExecutionTests(unittest.TestCase):
     def test_getter_does_not_clean_arbitrary_x0(self):
-        for name in ("yunluo", "peral"):
+        for name in ("yunluo", "peral", "xaga"):
             p = build.load_profile(name)
             data = build.patch(synthetic_atf(p), p)
             m = build.Machine(data, b"", p)
@@ -124,7 +124,7 @@ class SyntheticExecutionTests(unittest.TestCase):
             self.assertEqual(m.events, [])
 
     def test_callback_synchronizes_and_preserves_abi(self):
-        for name in ("yunluo", "peral"):
+        for name in ("yunluo", "peral", "xaga"):
             with self.subTest(profile=name):
                 p = build.load_profile(name)
                 data = build.patch(synthetic_atf(p), p)
