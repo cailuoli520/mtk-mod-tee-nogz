@@ -267,7 +267,6 @@ def regression(original, candidate, lk, p):
     results.append("budget_exhaustion_rejected")
     return results
 
-
 def run_tool(tools, name, args, output):
     result = subprocess.run([sys.executable, str(tools / name), *map(str, args)],
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -307,7 +306,7 @@ def detect_signing_mode(preloader, output_dir):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--profile", choices=["yunluo", "peral"], required=True)
+    parser.add_argument("--profile", choices=["yunluo", "peral", "xaga"], required=True)
     parser.add_argument("--tee", type=Path, required=True)
     parser.add_argument("--lk", type=Path, required=True)
     parser.add_argument("--preloader", type=Path, help="matching preloader; required when signing")
@@ -338,8 +337,9 @@ def main():
     mode = "legacy" if flags else "new"
     unsigned, final = args.out_dir / "tee.unsigned.img", args.out_dir / f"tee_nogz_{mode}.img"
     unsigned.write_bytes(patch(source, p, 512))
+    all_flag = sign_all_flag(args.tools)
     run_tool(args.tools, "sign_mtk_cert.py",
-             [unsigned, *flags, "--all", "-w", "-o", final], args.out_dir / "sign.log")
+             [unsigned, *flags, *all_flag, "-w", "-o", final], args.out_dir / "sign.log")
     output = run_tool(args.tools, "verify_mtk_image.py", ["--all", final], args.out_dir / "verify.log")
     require(output.count("Result: VALID") == 2, "Expected two VALID image groups")
     signed = parts(final.read_bytes())
@@ -358,12 +358,13 @@ def main():
         "output": str(final.resolve()), "output_size": final.stat().st_size,
         "output_sha256": sha(final.read_bytes()), "passed_checks": checks,
         "cert_mode": mode, "signing_mode_flags": flags,
+        "sign_tool_all_flag": bool(all_flag),
         "input_preloader_sha256": detection["sha256"],
         "cert_detection": {key: detection.get(key) for key in ("status", "isa", "reason")},
         "cert_detection_report": "cert-mode.txt",
-        "historical_output_cert_mode": p["historical_output_cert_mode"],
-        "historical_output_matches": (sha(final.read_bytes()) == p["historical_output_sha256"]
-                                      if mode == p["historical_output_cert_mode"] else None),
+        "historical_output_cert_mode": p.get("historical_output_cert_mode"),
+        "historical_output_matches": (sha(final.read_bytes()) == p.get("historical_output_sha256")
+                                      if mode == p.get("historical_output_cert_mode") else None),
         "device_tested": False, "scope": "Bounded instruction regression, not full boot or hardware verification",
         "patches": [{"atf_offset": hex(o), "file_offset": hex(o + 512),
                      "before": hex(b), "after": hex(a)} for o, b, a in patches(p)],

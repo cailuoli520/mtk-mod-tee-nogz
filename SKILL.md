@@ -21,6 +21,7 @@ description: 离线检查和修改联发科 tee.img 中的 ATF，实现已知 yu
 
 ```text
 python scripts/build.py --profile peral --tee <original-tee> --lk <original-lk> --check-only
+python scripts/build.py --profile xaga --tee <original-tee> --lk <original-lk> --check-only
 python scripts/build.py --profile peral --tee <original-tee> --lk <original-lk> --preloader <matching-preloader> --tools <pwnage-directory> --out-dir <new-directory>
 ```
 

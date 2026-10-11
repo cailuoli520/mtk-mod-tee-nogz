@@ -269,18 +269,18 @@ callback 则携带 tag 地址进入尾部，先 clean，再 barrier，最后经 
 
 下表偏移均相对 ATF 数据起点，不是整个分区的绝对文件偏移。
 
-| 用途 | yunluo ATF 偏移 | peral ATF 偏移 | 新指令字 |
-|---|---|---|---|
-| 正确 LK 入口 | `0x12914` | `0x1a8a8` | `D2AA1E08` |
-| AArch64 内核 SPSR | `0x47ac` | `0x65fc` | `5280792C` |
-| GZ getter 返回零 | `0xac7c` | `0xe18c` | `52800000` |
-| getter 提前返回 | `0xac80` | `0xe190` | `D65F03C0` |
-| callback flags=1 | `0xa578` | `0xdaa8` | `52800028` |
-| 写共享 flags | `0xa580` | `0xdab0` | `B9000008` |
-| 跳转清理尾部 | `0xa588` | `0xdab8` | yunluo `140001BF`，peral `140001B7` |
-| clean tag cache line | `0xac84` | `0xe194` | `D50B7A20` |
-| barrier | `0xac88` | `0xe198` | `D5033F9F` |
-| 尾部返回零 | `0xac8c` | `0xe19c` | `17FFFFFC` |
+| 用途 | yunluo ATF 偏移 | peral ATF 偏移 | xaga ATF 偏移 | 新指令字 |
+|---|---|---|---|---|
+| 正确 LK 入口 | `0x12914` | `0x1a8a8` | `0x1ad9c` | `D2AA1E08` |
+| AArch64 内核 SPSR | `0x47ac` | `0x65fc` | `0x64a4` | `5280792C` |
+| GZ getter 返回零 | `0xac7c` | `0xe18c` | `0xe5f8` | `52800000` |
+| getter 提前返回 | `0xac80` | `0xe190` | `0xe5fc` | `D65F03C0` |
+| callback flags=1 | `0xa578` | `0xdaa8` | `0xdf14` | `52800028` |
+| 写共享 flags | `0xa580` | `0xdab0` | `0xdf1c` | `B9000008` |
+| 跳转清理尾部 | `0xa588` | `0xdab8` | `0xdf24` | yunluo `140001BF`，peral/xaga `140001B7` |
+| clean tag cache line | `0xac84` | `0xe194` | `0xe600` | `D50B7A20` |
+| barrier | `0xac88` | `0xe198` | `0xe604` | `D5033F9F` |
+| 尾部返回零 | `0xac8c` | `0xe19c` | `0xe608` | `17FFFFFC` |
 
 原 getter 首两条和全部其他原值在 `patches()` 中校验；getter 的原始页/偏移指令由 profile 区分。
 每次应用补丁前，都需要原指令字精确相等。
@@ -292,6 +292,7 @@ ATF 数据长度不变，没有附加独立 payload；签名后成品整体增�
 
 - yunluo：ATF 数据偏移 `0x1295c`。
 - peral：ATF 数据偏移 `0x1a8f0`。
+- xaga：ATF 数据偏移 `0x1ade4`。
 
 <a id="profiles"></a>
 ## 6. 地址与配置字段
@@ -335,6 +336,11 @@ peral tee:
 457cc18c9abdf6efd19fb06f913370a195e59bfaf4fe0398de70713bb2e541dd
 peral LK:
 b667a393d6d5bf573424f0e96615bea8207f27ba28dc7ba7097f7b3b5b09e5e2
+
+xaga tee:
+bd4b13a7f75deb8decc401f30206894f60dab50c79f3200d34433480191a97ac
+xaga LK:
+03856964ce672ef604fec34a701c6c687c0d296b6187f771e3647fac4dee9ef1
 ```
 
 重命名文件不影响匹配；同机型的另一个固件版本、旧签名成品或已打过其他补丁的 LK 通常不匹配。
@@ -378,6 +384,40 @@ b667a393d6d5bf573424f0e96615bea8207f27ba28dc7ba7097f7b3b5b09e5e2
 | LK GZ gate | `0x280c` | `0x28d4` |
 | LK 跳过 GZ 的目标 | `0x283c` | `0x2904` |
 
+### 6.4 xaga (Redmi Note 11T Pro) 定位结果
+
+xaga 的 ATF 数据长度为 `0x46190`，明显小于 peral，因此下列偏移全部由独立反汇编定位，
+不复用其他 profile 的数值。字段均已通过 `--profile xaga --check-only` 的 14 条回归（含负例）。
+
+| 字段 | xaga 值 | 定位证据 |
+|---|---|---|
+| `pc_patch` | `0x1ad9c` | cold writer 中 `ldr x8,[x1,#0x10]; str x8,[x0,#8]` |
+| `kernel_patch` | `0x64a4` | kernel helper 中 `csel w12,w13,w12,eq`，w12=0x3c9、w13=0x3c5 |
+| `getter` | `0xe5f8` | `adrp; ldr w8; mvn w8,w8; and w0,w8,#1; ret` |
+| `flag` | `0x45f08` | getter `adrp x8,#0x48245000; ldr w8,[x8,#0xf08]`，与 callback 写入同一地址 |
+| `callback` | `0xdf14` | `ldr w8,[x0]; adrp x9; mov w0,wzr; str w8,[x9,#0xf08]; ret` |
+| `cold` | `[0x1ad74, 0x1adf8)` | 含 pc_patch 与 cold SPSR selector `0x1ade4` 的完整函数 |
+| `cold_helpers` | `[0xb6e8, 0xb700)` | cold writer 的两个直接辅助读取函数 |
+| `kernel` | `[0x6454, 0x6538)` | AArch64 内核交接 helper 的有界执行范围 |
+| `ep` | `0x53930` | cold writer 调用点 `adrp x0,#0x48253000; add x0,x0,#0x930`；PC 在 `+8`，SPSR 在 `+0x10` |
+| `kernel_args` | `0x539e0` | `ep + 0xb0`，内核 helper 读取的三个 64 位参数 |
+| `tag_parser` | `[0x6688, 0x68e8)` | ATF tag dispatcher；调用 callback 时 x0 已是 tag+8 |
+| `args_getter` | `[0xb7fc, 0xb858)` | dispatcher 首个 `bl` 目标；参数 0 返回 handoff 指针 |
+| `handoff_global` | `0x53af0` | args_getter：`adrp x8,#0x48253000; ldr x0,[x8,#0xaf0]` |
+| `lk_parser` | `[0x14cac, 0x14d40)` | LK tag 表遍历，`ldr x8,[x20,#8]; blr x8` 调用 handler |
+| `lk_getter` | `0x1e8a8` | `adrp; ldr w8; mvn w8,w8; and w0,w8,#1; ret` |
+| `lk_callback` | `0x1e8bc` | `ldr w8,[x0,#8]; adrp x9; str w8,[x9,#0x4f8]; ret` |
+| `lk_gate` | `0x28d4` | `bl lk_getter; cbz w0,<skip>` |
+| `lk_skip` | `0x2904` | gate 在 GZ 禁用时的跳转目标 |
+| `lk_stack` | `[0x1a7a0, 0x1a7cc)` | LK+0 首个 `bl` 目标所在的栈设置函数 |
+| `lk_elcheck` / `lk_illegal` | `[0x39c8, 0x3a6c)` / `0x3a18` | CurrentEL 分支及 EL2 下的 CPTR_EL3 读取 |
+
+xaga 的 `lk_gate`、`lk_skip`、`lk_elcheck`、`lk_illegal` 与 peral 数值相同，
+其余偏移与 peral 存在数十到数百字节的差异，不能互相套用。
+
+ATF 基址 `0x48200000`、LK 基址 `0x50f00000`、共享 tag 基址 `0x48600000` 与现有模型一致：
+xaga ATF 数据区内有 640 个落在 `0x482` 页的绝对指针，LK 内有 1300 个 `0xffff000050f...` 指针。
+
 <a id="usage"></a>
 ## 7. 运行方法
 
@@ -417,6 +457,13 @@ yunluo：
 ```powershell
 $inputDir = Join-Path $HOME 'private-firmware\yunluo'
 .\.venv\Scripts\python.exe scripts/build.py --profile yunluo --tee "$inputDir\tee.img" --lk "$inputDir\lk.img" --check-only
+```
+
+xaga：
+
+```powershell
+$inputDir = Join-Path $HOME 'private-firmware\xaga'
+.\.venv\Scripts\python.exe scripts/build.py --profile xaga --tee "$inputDir\tee.img" --lk "$inputDir\lk.img" --check-only
 ```
 
 `--check-only` 仍会检查 TEE/LK 身份、在内存中构造补丁并执行回归。
@@ -473,7 +520,7 @@ preloader 不按 profile 固定哈希选择模式，但会记录并检查本次�
 
 | 参数 | 必需条件 | 说明 |
 |---|---|---|
-| `--profile` | 始终 | 当前仅 `yunluo` 或 `peral` |
+| `--profile` | 始终 | 当前为 `yunluo`、`peral` 或 `xaga` |
 | `--tee` | 始终 | 原始 tee.img 路径 |
 | `--lk` | 始终 | 匹配 profile 的原始 LK 路径，仅用于读取测试 |
 | `--preloader` | 普通构建 | 对应 preloader，仅用于模式检测与哈希记录 |
@@ -721,7 +768,7 @@ SHA-256：
 <a id="adaptation"></a>
 ## 12. 新版本适配
 
-当前 CLI 的 `--profile` choices 明确只有 `yunluo` 和 `peral`。
+当前 CLI 的 `--profile` choices 为 `yunluo`、`peral` 和 `xaga`。
 新增 JSON 项本身不足以完成支持，也不能仅更新哈希；需要重新审计代码、布局和测试。
 
 适配前读 [未知版本与排错](../references/adaptation.md)，重点包括：
